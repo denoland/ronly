@@ -1,6 +1,6 @@
 [package]
 name = "ronly"
-version = "0.0.1"
+version = "0.0.2"
 edition = "2021"
 authors = ["Ryan Dahl <ry@tinyclouds.org>"]
 description = "Read-only sandbox for untrustworthy agents"

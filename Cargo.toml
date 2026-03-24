@@ -11,9 +11,6 @@ repository = "https://github.com/denoland/ronly"
 lexopt = "0.3"
 libc = "0.2"
 
-[dev-dependencies]
-nix = { version = "0.29", features = ["user"] }
-
 [target.'cfg(target_os = "linux")'.dependencies]
 nix = { version = "0.29", features = [
   "mount",
@@ -23,3 +20,9 @@ nix = { version = "0.29", features = [
   "fs",
 ] }
 seccompiler = "0.5"
+
+[profile.release]
+strip = true
+lto = true
+codegen-units = 1
+panic = "abort"

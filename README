@@ -1,13 +1,14 @@
 ronly — read-only sandbox for untrustworthy agents
 
-Linux only.
-
 Drop into a shell session where everything looks normal but
 destructive operations are blocked at the kernel level.
-Runs rootless via user namespaces where available, falls
-back to root (CAP_SYS_ADMIN) otherwise.
+
+Linux only. Runs rootless via user namespaces on any
+kernel 4.6+ (Debian 11+, RHEL 8+, Ubuntu 16.04+). Falls
+back to privileged mode if user namespaces are unavailable.
 
   $ kubectl exec -it debug-pod -- ronly
+  ronly: rootless (user namespaces)
   root@debug-pod:~# top -bn1 | head -5
   top - 14:23:01 up 42 days, load average: 2.31, 1.87
   Tasks: 312 total,   1 running, 311 sleeping
@@ -40,12 +41,12 @@ HOW IT WORKS
      mount, reboot. ptrace write ops blocked but read ops
      allowed (so strace works). Defense in depth.
 
-  4. Tool shims — ronly is bind-mounted into a shims dir
-     on PATH under names like "docker" and "kubectl". The
-     shell finds the shim, ronly checks argv[0], and either
-     execs the real binary (read-only subcommands) or exits
-     with an error (write subcommands). No shell scripts,
-     no extra binaries, zero disk overhead.
+  4. Tool shims — ronly copies itself into /tmp under
+     names like "docker" and "kubectl" (one copy, rest are
+     hard links) and prepends that dir to PATH. The shell
+     finds the shim, ronly checks argv[0], and either execs
+     the real binary (read-only subcommands) or exits with
+     an error (write subcommands).
 
 Network is not restricted. The agent can make outbound
 connections. Layer your own network policy if exfiltration
@@ -57,12 +58,17 @@ USAGE
 
 With no arguments, execs $SHELL (or /bin/bash).
 
+  --rootless           force rootless mode (user namespaces)
+  --privileged         force privileged mode (requires root)
   --tmpfs-size SIZE    writable /tmp size (default: 64M)
   --extra-shims DIR    additional shim directory
   --no-shims           disable all shims
   --writable PATH      empty writable tmpfs at PATH
   --help               show this help
   --version            show version
+
+By default, ronly tries rootless first and falls back to
+privileged. It prints which mode it's using to stderr.
 
 BUILT-IN SHIMS
 

@@ -13,33 +13,28 @@ fn die(msg: &str) -> ! {
     unsafe { libc::_exit(1) }
 }
 
-const ROOTLESS_SHIMS_DIR: &str = "/tmp/.ronly-shims";
+const SHIMS_DIR: &str = "/tmp/.ronly-shims";
 
 fn mount_tmpfs(
     target: &str,
     size: &str,
 ) -> crate::Result<()> {
-    let data = format!("size={}", size);
     nix::mount::mount(
         Some("tmpfs"),
         target,
         Some("tmpfs"),
         MsFlags::MS_NOSUID | MsFlags::MS_NODEV,
-        Some(data.as_str()),
+        Some(format!("size={}", size).as_str()),
     )?;
     Ok(())
 }
 
-/// Set up mounts. Returns the shims dir actually used.
 fn setup_mounts(
     args: &Args,
-    self_exe: Option<&std::path::Path>,
-    rootless: bool,
-) -> crate::Result<String> {
-    // Create dirs before going read-only
-    if !rootless {
-        std::fs::create_dir_all(shims::SHIMS_DIR).ok();
-    }
+    has_shims: bool,
+) -> crate::Result<()> {
+    // Create writable mount points before going read-only.
+    // Silently fails in rootless mode (no real root).
     for p in &args.writable {
         std::fs::create_dir_all(p).ok();
     }
@@ -65,55 +60,28 @@ fn setup_mounts(
         None::<&str>,
     )?;
 
-    let shims_dir;
+    // Writable /tmp
+    mount_tmpfs("/tmp", &args.tmpfs_size)?;
 
-    if rootless {
-        mount_tmpfs("/tmp", &args.tmpfs_size)?;
-
-        // Create writable subdirs inside the fresh /tmp
-        for p in &args.writable {
-            if p.starts_with("/tmp/")
-                && p != Path::new(ROOTLESS_SHIMS_DIR)
-            {
-                std::fs::create_dir_all(p)?;
-            }
-        }
-
-        // Copy shims into /tmp since we can't bind-mount
-        // without privileges. Uses /proc/self/exe which
-        // the kernel resolves to the open file regardless
-        // of mount changes, unlike the pre-resolved path.
-        shims_dir = ROOTLESS_SHIMS_DIR.to_string();
-        std::fs::create_dir_all(&shims_dir)?;
-        if self_exe.is_some() {
-            shims::copy_shims(
-                Path::new("/proc/self/exe"),
-                &shims_dir,
-            )?;
-        }
-    } else {
-        // Privileged: mount shims BEFORE /tmp so the
-        // binary (which may live under /tmp) is still
-        // visible for bind-mounting.
-        shims_dir = shims::SHIMS_DIR.to_string();
-        mount_tmpfs(shims::SHIMS_DIR, "1m")?;
-        if let Some(exe) = self_exe {
-            shims::install_shims(exe, &shims_dir)?;
-        }
-
-        mount_tmpfs("/tmp", &args.tmpfs_size)?;
+    // Copy shims into /tmp. /proc/self/exe resolves
+    // through the kernel's open-file reference, so it
+    // works even after mounts change.
+    if has_shims {
+        shims::copy_shims(
+            Path::new("/proc/self/exe"),
+            SHIMS_DIR,
+        )?;
     }
 
     // Additional writable paths
     for p in &args.writable {
-        let p = p.to_string_lossy();
-        if rootless && p.as_ref() == ROOTLESS_SHIMS_DIR {
-            continue;
-        }
-        mount_tmpfs(p.as_ref(), &args.tmpfs_size)?;
+        mount_tmpfs(
+            &p.to_string_lossy(),
+            &args.tmpfs_size,
+        )?;
     }
 
-    Ok(shims_dir)
+    Ok(())
 }
 
 fn setup_seccomp() -> crate::Result<()> {
@@ -196,67 +164,92 @@ fn setup_seccomp() -> crate::Result<()> {
     Ok(())
 }
 
-fn setup_id_map(
-    real_uid: u32,
-    real_gid: u32,
-) -> crate::Result<()> {
-    use std::fs;
-    // Must deny setgroups before writing gid_map as
-    // unprivileged
-    fs::write("/proc/self/setgroups", "deny")?;
-    fs::write(
-        "/proc/self/uid_map",
-        format!("0 {} 1\n", real_uid),
-    )?;
-    fs::write(
-        "/proc/self/gid_map",
-        format!("0 {} 1\n", real_gid),
-    )?;
-    Ok(())
-}
-
 pub fn run(args: Args) -> crate::Result<()> {
-    // Resolve the on-disk path before mounts change the FS
-    let self_exe = if !args.no_shims {
-        Some(std::fs::read_link("/proc/self/exe")?)
-    } else {
-        None
-    };
+    use crate::Mode;
 
-    // Save real UID/GID before entering user namespace
-    let real_uid: u32 = unsafe { libc::getuid() };
-    let real_gid: u32 = unsafe { libc::getgid() };
+    let has_shims = !args.no_shims;
+    let real_uid = unsafe { libc::getuid() };
+    let real_gid = unsafe { libc::getgid() };
 
-    // Try rootless (user namespace) first, fall back to
-    // privileged
-    let used_userns = match nix::sched::unshare(
-        CloneFlags::CLONE_NEWUSER
-            | CloneFlags::CLONE_NEWNS
-            | CloneFlags::CLONE_NEWPID,
-    ) {
-        Ok(()) => true,
-        Err(_) => {
+    let rootless = match args.mode {
+        Mode::Rootless => {
+            if let Err(_) = nix::sched::unshare(
+                CloneFlags::CLONE_NEWUSER
+                    | CloneFlags::CLONE_NEWNS
+                    | CloneFlags::CLONE_NEWPID,
+            ) {
+                eprintln!(
+                    "ronly: user namespaces unavailable, \
+                     try --privileged as root"
+                );
+                std::process::exit(1);
+            }
+            true
+        }
+        Mode::Privileged => {
             if let Err(_) = nix::sched::unshare(
                 CloneFlags::CLONE_NEWNS
                     | CloneFlags::CLONE_NEWPID,
             ) {
                 eprintln!(
-                    "ronly: requires unprivileged user \
-                     namespaces or root"
+                    "ronly: --privileged requires root \
+                     (CAP_SYS_ADMIN), try --rootless"
                 );
                 std::process::exit(1);
             }
             false
         }
+        Mode::Auto => {
+            match nix::sched::unshare(
+                CloneFlags::CLONE_NEWUSER
+                    | CloneFlags::CLONE_NEWNS
+                    | CloneFlags::CLONE_NEWPID,
+            ) {
+                Ok(()) => true,
+                Err(_) => {
+                    if let Err(_) = nix::sched::unshare(
+                        CloneFlags::CLONE_NEWNS
+                            | CloneFlags::CLONE_NEWPID,
+                    ) {
+                        eprintln!(
+                            "ronly: needs user namespaces \
+                             or root, see --rootless \
+                             and --privileged"
+                        );
+                        std::process::exit(1);
+                    }
+                    false
+                }
+            }
+        }
     };
 
-    if used_userns {
-        if let Err(e) =
-            setup_id_map(real_uid, real_gid)
-        {
-            eprintln!("ronly: uid/gid map: {}", e);
+    if rootless {
+        eprintln!("ronly: rootless (user namespaces)");
+        let map_ok = std::fs::write(
+            "/proc/self/setgroups",
+            "deny",
+        )
+        .and_then(|_| {
+            std::fs::write(
+                "/proc/self/uid_map",
+                format!("0 {} 1\n", real_uid),
+            )
+        })
+        .and_then(|_| {
+            std::fs::write(
+                "/proc/self/gid_map",
+                format!("0 {} 1\n", real_gid),
+            )
+        });
+        if let Err(e) = map_ok {
+            eprintln!(
+                "ronly: uid/gid mapping failed: {e}"
+            );
             std::process::exit(1);
         }
+    } else {
+        eprintln!("ronly: privileged (root)");
     }
 
     match unsafe { nix::unistd::fork()? } {
@@ -272,27 +265,17 @@ pub fn run(args: Args) -> crate::Result<()> {
             std::process::exit(code);
         }
         ForkResult::Child => {
-            child_main(args, self_exe, used_userns);
+            child_main(args, has_shims);
         }
     }
 }
 
-fn child_main(
-    args: Args,
-    self_exe: Option<std::path::PathBuf>,
-    rootless: bool,
-) -> ! {
-    let shims_dir = match setup_mounts(
-        &args,
-        self_exe.as_deref(),
-        rootless,
-    ) {
-        Ok(d) => d,
-        Err(e) => die(&format!("ronly: mounts: {}", e)),
-    };
+fn child_main(args: Args, has_shims: bool) -> ! {
+    if let Err(e) = setup_mounts(&args, has_shims) {
+        die(&format!("ronly: mounts: {}", e));
+    }
 
-    if self_exe.is_some() {
-        // PATH: extra shims > built-in shims > system
+    if has_shims {
         let sys_path =
             std::env::var("PATH").unwrap_or_default();
         let mut parts: Vec<String> = args
@@ -300,7 +283,7 @@ fn child_main(
             .iter()
             .map(|d| d.to_string_lossy().into_owned())
             .collect();
-        parts.push(shims_dir);
+        parts.push(SHIMS_DIR.to_string());
         parts.push(sys_path);
         std::env::set_var("PATH", parts.join(":"));
     }

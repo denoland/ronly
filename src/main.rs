@@ -5,12 +5,20 @@ type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 mod sandbox;
 mod shims;
 
+#[derive(Clone, Copy, PartialEq)]
+pub enum Mode {
+    Auto,
+    Rootless,
+    Privileged,
+}
+
 pub struct Args {
     pub command: Vec<String>,
     pub tmpfs_size: String,
     pub extra_shims: Vec<PathBuf>,
     pub no_shims: bool,
     pub writable: Vec<PathBuf>,
+    pub mode: Mode,
 }
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -25,6 +33,7 @@ fn parse_args() -> Args {
         extra_shims: vec![],
         no_shims: false,
         writable: vec![],
+        mode: Mode::Auto,
     };
 
     let mut parser = lexopt::Parser::from_env();
@@ -50,6 +59,12 @@ fn parse_args() -> Args {
             }
             Long("no-shims") => {
                 args.no_shims = true;
+            }
+            Long("rootless") => {
+                args.mode = Mode::Rootless;
+            }
+            Long("privileged") => {
+                args.mode = Mode::Privileged;
             }
             Long("writable") => {
                 args.writable.push(

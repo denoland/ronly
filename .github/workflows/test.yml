@@ -2,11 +2,22 @@ name: test
 on: [push, pull_request]
 
 jobs:
-  test:
+  test-rootless:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - name: Test
+      - name: Test (rootless)
+        run: cargo test --release
+
+  test-privileged:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Test (privileged)
         run: sudo -E env "PATH=$PATH" cargo test --release
+        env:
+          RONLY_TEST_MODE: privileged

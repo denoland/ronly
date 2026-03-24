@@ -4,7 +4,8 @@ Linux only.
 
 Drop into a shell session where everything looks normal but
 destructive operations are blocked at the kernel level.
-Requires root (or CAP_SYS_ADMIN) for namespace setup.
+Runs rootless via user namespaces where available, falls
+back to root (CAP_SYS_ADMIN) otherwise.
 
   $ kubectl exec -it debug-pod -- ronly
   root@debug-pod:~# top -bn1 | head -5

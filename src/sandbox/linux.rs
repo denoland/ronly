@@ -14,10 +14,7 @@ fn die(msg: &str) -> ! {
 
 const SHIMS_DIR: &str = "/tmp/.ronly-shims";
 
-fn mount_tmpfs(
-    target: &str,
-    size: &str,
-) -> crate::Result<()> {
+fn mount_tmpfs(target: &str, size: &str) -> crate::Result<()> {
     nix::mount::mount(
         Some("tmpfs"),
         target,
@@ -28,10 +25,7 @@ fn mount_tmpfs(
     Ok(())
 }
 
-fn setup_mounts(
-    args: &Args,
-    has_shims: bool,
-) -> crate::Result<()> {
+fn setup_mounts(args: &Args, has_shims: bool) -> crate::Result<()> {
     // Create writable mount points before going read-only.
     // Silently fails in rootless mode (no real root).
     for p in &args.writable {
@@ -53,9 +47,7 @@ fn setup_mounts(
         Some("/"),
         "/",
         None::<&str>,
-        MsFlags::MS_BIND
-            | MsFlags::MS_REMOUNT
-            | MsFlags::MS_RDONLY,
+        MsFlags::MS_BIND | MsFlags::MS_REMOUNT | MsFlags::MS_RDONLY,
         None::<&str>,
     )?;
 
@@ -66,18 +58,12 @@ fn setup_mounts(
     // through the kernel's open-file reference, so it
     // works even after mounts change.
     if has_shims {
-        shims::copy_shims(
-            Path::new("/proc/self/exe"),
-            SHIMS_DIR,
-        )?;
+        shims::copy_shims(Path::new("/proc/self/exe"), SHIMS_DIR)?;
     }
 
     // Additional writable paths
     for p in &args.writable {
-        mount_tmpfs(
-            &p.to_string_lossy(),
-            &args.tmpfs_size,
-        )?;
+        mount_tmpfs(&p.to_string_lossy(), &args.tmpfs_size)?;
     }
 
     Ok(())
@@ -106,17 +92,10 @@ fn setup_seccomp() -> crate::Result<()> {
         libc::SYS_reboot,
     ];
     #[cfg(target_arch = "x86_64")]
-    blocked.extend_from_slice(&[
-        libc::SYS_unlink,
-        libc::SYS_rmdir,
-        libc::SYS_rename,
-    ]);
+    blocked.extend_from_slice(&[libc::SYS_unlink, libc::SYS_rmdir, libc::SYS_rename]);
 
     let mut rules: BTreeMap<i64, Vec<SeccompRule>> =
-        blocked
-            .into_iter()
-            .map(|sc| (sc, vec![]))
-            .collect();
+        blocked.into_iter().map(|sc| (sc, vec![])).collect();
 
     // ptrace: block write ops, allow read ops
     #[allow(unused_mut)]
@@ -127,10 +106,8 @@ fn setup_seccomp() -> crate::Result<()> {
         libc::PTRACE_SETREGSET as u64,
     ];
     #[cfg(target_arch = "x86_64")]
-    ptrace_write_ops.extend_from_slice(&[
-        libc::PTRACE_SETREGS as u64,
-        libc::PTRACE_SETFPREGS as u64,
-    ]);
+    ptrace_write_ops
+        .extend_from_slice(&[libc::PTRACE_SETREGS as u64, libc::PTRACE_SETFPREGS as u64]);
     let ptrace_rules: Vec<SeccompRule> = ptrace_write_ops
         .into_iter()
         .map(|op| {
@@ -146,10 +123,9 @@ fn setup_seccomp() -> crate::Result<()> {
         .collect();
     rules.insert(libc::SYS_ptrace, ptrace_rules);
 
-    let arch =
-        std::env::consts::ARCH.try_into().map_err(|e| {
-            format!("unsupported arch: {}", e)
-        })?;
+    let arch = std::env::consts::ARCH
+        .try_into()
+        .map_err(|e| format!("unsupported arch: {}", e))?;
 
     let filter = SeccompFilter::new(
         rules,
@@ -170,10 +146,11 @@ pub fn run(args: Args) -> crate::Result<()> {
     let real_uid = unsafe { libc::getuid() };
     let real_gid = unsafe { libc::getgid() };
 
-    let net_flag = args
-        .no_network
-        .then_some(CloneFlags::CLONE_NEWNET)
-        .unwrap_or_default();
+    let net_flag = if args.no_network {
+        CloneFlags::CLONE_NEWNET
+    } else {
+        CloneFlags::empty()
+    };
 
     let rootless = match args.mode {
         Mode::Rootless => {
@@ -220,26 +197,11 @@ pub fn run(args: Args) -> crate::Result<()> {
 
     if rootless {
         eprintln!("ronly: using user namespaces (--rootless)");
-        let map_ok = std::fs::write(
-            "/proc/self/setgroups",
-            "deny",
-        )
-        .and_then(|_| {
-            std::fs::write(
-                "/proc/self/uid_map",
-                format!("0 {} 1\n", real_uid),
-            )
-        })
-        .and_then(|_| {
-            std::fs::write(
-                "/proc/self/gid_map",
-                format!("0 {} 1\n", real_gid),
-            )
-        });
+        let map_ok = std::fs::write("/proc/self/setgroups", "deny")
+            .and_then(|_| std::fs::write("/proc/self/uid_map", format!("0 {} 1\n", real_uid)))
+            .and_then(|_| std::fs::write("/proc/self/gid_map", format!("0 {} 1\n", real_gid)));
         if let Err(e) = map_ok {
-            eprintln!(
-                "ronly: uid/gid mapping failed: {e}"
-            );
+            eprintln!("ronly: uid/gid mapping failed: {e}");
             std::process::exit(1);
         }
     } else {
@@ -255,8 +217,7 @@ pub fn run(args: Args) -> crate::Result<()> {
     }
 
     if has_shims {
-        let sys_path =
-            std::env::var("PATH").unwrap_or_default();
+        let sys_path = std::env::var("PATH").unwrap_or_default();
         let mut parts: Vec<String> = args
             .extra_shims
             .iter()
@@ -273,8 +234,7 @@ pub fn run(args: Args) -> crate::Result<()> {
 
     // Default to $SHELL or /bin/bash
     let command = if args.command.is_empty() {
-        vec![std::env::var("SHELL")
-            .unwrap_or_else(|_| "/bin/bash".into())]
+        vec![std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".into())]
     } else {
         args.command
     };

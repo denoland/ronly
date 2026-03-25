@@ -17,6 +17,7 @@ pub struct Args {
     pub tmpfs_size: String,
     pub extra_shims: Vec<PathBuf>,
     pub no_shims: bool,
+    pub no_network: bool,
     pub writable: Vec<PathBuf>,
     pub mode: Mode,
 }
@@ -32,6 +33,7 @@ fn parse_args() -> Args {
         tmpfs_size: "64M".into(),
         extra_shims: vec![],
         no_shims: false,
+        no_network: false,
         writable: vec![],
         mode: Mode::Auto,
     };
@@ -59,6 +61,9 @@ fn parse_args() -> Args {
             }
             Long("no-shims") => {
                 args.no_shims = true;
+            }
+            Long("no-network") => {
+                args.no_network = true;
             }
             Long("rootless") => {
                 args.mode = Mode::Rootless;

@@ -154,6 +154,44 @@ fn kubectl_apply_blocked() {
     assert!(combined(&out).contains("blocked"));
 }
 
+// --- no-network ---
+
+#[test]
+fn no_network_has_no_interfaces() {
+    // An empty network namespace only has a loopback device,
+    // and it starts DOWN. No eth0, no external connectivity.
+    let out = ronly()
+        .args(["--no-network", "--"])
+        .args(["cat", "/proc/net/dev"])
+        .output()
+        .expect("failed to run ronly");
+    assert!(out.status.success(), "{}", combined(&out));
+    let interfaces: Vec<&str> = stdout(&out)
+        .lines()
+        .skip(2) // skip header lines
+        .filter_map(|l| l.split(':').next())
+        .map(|s| s.trim())
+        .collect();
+    assert_eq!(
+        interfaces,
+        vec!["lo"],
+        "expected only loopback in isolated network namespace, got: {:?}",
+        interfaces
+    );
+}
+
+#[test]
+fn no_network_local_ops_work() {
+    let out = ronly()
+        .args(["--no-network", "--"])
+        .args(["bash", "-c",
+            "ps aux > /tmp/diag && cat /proc/self/status >> /tmp/diag && wc -l /tmp/diag"])
+        .output()
+        .expect("failed to run ronly");
+    assert!(out.status.success(), "{}", combined(&out));
+    assert!(!stdout(&out).is_empty());
+}
+
 // --- exit codes ---
 
 #[test]

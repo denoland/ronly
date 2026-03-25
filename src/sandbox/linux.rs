@@ -170,12 +170,16 @@ pub fn run(args: Args) -> crate::Result<()> {
     let real_uid = unsafe { libc::getuid() };
     let real_gid = unsafe { libc::getgid() };
 
+    let mut net_flag = args
+        .no_network
+        .then_some(CloneFlags::CLONE_NEWNET)
+        .unwrap_or_default();
+
     let rootless = match args.mode {
         Mode::Rootless => {
-            if let Err(_) = nix::sched::unshare(
-                CloneFlags::CLONE_NEWUSER
-                    | CloneFlags::CLONE_NEWNS,
-            ) {
+            if let Err(_) =
+                nix::sched::unshare(CloneFlags::CLONE_NEWUSER | CloneFlags::CLONE_NEWNS | net_flag)
+            {
                 eprintln!(
                     "ronly: user namespaces unavailable, \
                      try --privileged as root"
@@ -185,9 +189,7 @@ pub fn run(args: Args) -> crate::Result<()> {
             true
         }
         Mode::Privileged => {
-            if let Err(_) = nix::sched::unshare(
-                CloneFlags::CLONE_NEWNS,
-            ) {
+            if let Err(_) = nix::sched::unshare(CloneFlags::CLONE_NEWNS | net_flag) {
                 eprintln!(
                     "ronly: --privileged requires root \
                      (CAP_SYS_ADMIN), try --rootless"
@@ -198,14 +200,11 @@ pub fn run(args: Args) -> crate::Result<()> {
         }
         Mode::Auto => {
             match nix::sched::unshare(
-                CloneFlags::CLONE_NEWUSER
-                    | CloneFlags::CLONE_NEWNS,
+                CloneFlags::CLONE_NEWUSER | CloneFlags::CLONE_NEWNS | net_flag,
             ) {
                 Ok(()) => true,
                 Err(_) => {
-                    if let Err(_) = nix::sched::unshare(
-                        CloneFlags::CLONE_NEWNS,
-                    ) {
+                    if let Err(_) = nix::sched::unshare(CloneFlags::CLONE_NEWNS | net_flag) {
                         eprintln!(
                             "ronly: needs user namespaces \
                              or root, see --rootless \
@@ -245,6 +244,10 @@ pub fn run(args: Args) -> crate::Result<()> {
         }
     } else {
         eprintln!("ronly: using root privileges (--privileged)");
+    }
+
+    if args.no_network {
+        eprintln!("ronly: network disabled (--no-network)");
     }
 
     if let Err(e) = setup_mounts(&args, has_shims) {

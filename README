@@ -60,6 +60,7 @@ With no arguments, execs $SHELL (or /bin/bash).
   --tmpfs-size SIZE    writable /tmp size (default: 64M)
   --extra-shims DIR    additional shim directory
   --no-shims           disable all shims
+  --no-network         disable all network access (CLONE_NEWNET)
   --writable PATH      empty writable tmpfs at PATH
   --help               show this help
   --version            show version

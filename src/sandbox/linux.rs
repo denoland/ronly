@@ -170,7 +170,7 @@ pub fn run(args: Args) -> crate::Result<()> {
     let real_uid = unsafe { libc::getuid() };
     let real_gid = unsafe { libc::getgid() };
 
-    let mut net_flag = args
+    let net_flag = args
         .no_network
         .then_some(CloneFlags::CLONE_NEWNET)
         .unwrap_or_default();
